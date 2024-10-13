@@ -43,24 +43,17 @@ data = load_config(cnf_pth)
 paths = data.setdefault('Paths', [])
 if not paths:
     paths.append({})
-
 for path in paths:
-    if 'dow_pth' not in path:
-        path.setdefault('dow_pth', dow_pth)
-    if 'ext_pth' not in path:
-        path.setdefault('ext_pth', ext_pth)
-    if 'ins_pth' not in path:
-        path.setdefault('ins_pth', ins_pth)
-    if 'lnk_pth' not in path:
-        path.setdefault('lnk_pth', lnk_pth)
+    path.setdefault('dow_pth', dow_pth)
+    path.setdefault('ext_pth', ext_pth)
+    path.setdefault('ins_pth', ins_pth)
+    path.setdefault('lnk_pth', lnk_pth)
 
 programs = data.setdefault('Programs', [])
 if not programs:
     programs.append({})
-
 for program in programs:
-    if 'url' not in program:
-        program.setdefault('url', 'null')
+    program.setdefault('url', None)
 
 metadata = data.setdefault('Metadata', {})
 
@@ -209,7 +202,7 @@ for program in data['Programs']:
 
     except Exception as request_error:
         print(f"An error occurred while retrieving the URL: {request_error}")
-        exit(1)
+        continue
 
     ext = [".exe", ".zip", ".rar", ".iso"]
 
@@ -229,7 +222,7 @@ for program in data['Programs']:
 
     if not fle_nme.endswith(tuple(ext)):
         print(f"'{fle_nme}' filename cannot be without an extension.")
-        exit(1)
+        continue
 
     fle_pth = os.path.join(dow_pth, fle_nme)
 
@@ -282,16 +275,14 @@ for program in data['Programs']:
                 print(f"File '{fle_pth}' downloaded successfully!")
         except Exception as download_error:
             print(f"An error occurred while downloading file. {download_error}")
-            exit(1)
+            continue
         if os.path.exists(fle_pth):
             filedata = metadata.setdefault(fle_nme, [])
             if not filedata:
                 filedata.append({})
-            for meta in filedata:
-                if 'Hash' not in meta:
-                    meta.setdefault('Hash', FH)
-                if 'ETag' not in meta:
-                    meta.setdefault('ETag', ET)
-                if 'LMod' not in meta:
-                    meta.setdefault('LMod', LM)
+            filedata[0].update({
+                'Hash': FH,
+                'ETag': ET,
+                'LMod': LM
+            })
             save_config(cnf_pth, data)
