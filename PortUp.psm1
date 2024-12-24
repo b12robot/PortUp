@@ -7,7 +7,7 @@ function Get-Download {
 		[string]$FileExtension,
 		[string]$DownloadPath = (Get-Location).Path,
 		[string]$MetadataPath = (Get-Location).Path,
-		[switch]$DebugMode = $true
+		[switch]$DebugMode = $false
 	)
 	
 	begin {
@@ -106,8 +106,7 @@ function Get-Download {
 				exit 1
 			}
 			
-			$FileName = [System.IO.Path]::GetFileNameWithoutExtension($SelectedAsset.name)
-			$FileExtension = [System.IO.Path]::GetExtension($SelectedAsset.name)
+			$FileName = $SelectedAsset.name
 			$DownloadUrl = $SelectedAsset.browser_download_url
 		}
 		
@@ -136,7 +135,7 @@ function Get-Download {
 		
 		if (-not $FileName) {
 			$FileName = [System.IO.Path]::GetFileName($DownloadUrl)
-			$FileName = $FileName -replace "[{0}.]" -f ([System.IO.Path]::GetInvalidFileNameChars() -join '')
+			$FileName = $FileName -replace "[{0}]" -f ([System.IO.Path]::GetInvalidFileNameChars() -join '')
 			$FileName = $FileName.Substring(0, [Math]::Min($FileName.Length, 50))
 			Write-Debug "     FileName: '$FileName' from URL"
 		}
@@ -144,6 +143,11 @@ function Get-Download {
 		if (-not $FileName) {
 			$FileName = "Undefined"
 			Write-Debug "     FileName: '$FileName' from Default"
+		}
+		
+		if (-not (Validate-Extension -FileExtension $FileExtension) -and ($FileName -match '\..+')) {
+			$FileExtension = [System.IO.Path]::GetExtension($FileName)
+			Write-Debug "FileExtension: '$FileExtension' from FileName"
 		}
 		
 		if (-not (Validate-Extension -FileExtension $FileExtension) -and ($ContentDisposition -match '=.+(\.[^\.\s"]+)"?')) {
@@ -197,6 +201,7 @@ function Get-Download {
 			Write-Debug "FileExtension: '$FileExtension' from Default"
 		}
 		
+		$FileName = [System.IO.Path]::GetFileNameWithoutExtension($FileName)
 		$FullFileName = "$FileName$FileExtension"
 		$DownloadPath = Join-Path -Path $DownloadPath -ChildPath $FullFileName
 		$BackupPath = $DownloadPath + ".backup"

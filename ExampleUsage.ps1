@@ -1,7 +1,7 @@
 # Module path directory. (Optional)
 # By default, the current working directory is used.
 # The 'PortUp.psm1' module must be in the same directory as this script, or you must change the directory accordingly.
-Import-Module "$(pwd.Path)\PortUp.psm1"
+Import-Module "$($pwd.Path)\PortUp.psm1"
 
 # URL of the file to be downloaded (Required)
 # Get-Download -DownloadUrl "https://example.com/file.zip"
