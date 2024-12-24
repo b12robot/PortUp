@@ -11,6 +11,7 @@ function Get-Download {
 	)
 	
 	begin {
+		Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 		$DebugPreference = if ($DebugMode) { "Continue" } else { "SilentlyContinue" }
 	}
 	
