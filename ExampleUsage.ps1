@@ -6,13 +6,9 @@ Import-Module "$($pwd.Path)\PortUp.psm1"
 # URL of the file to be downloaded (Required)
 # Get-Download -DownloadUrl "https://example.com/file.zip"
 
-# Name of the downloaded file. (Optional)
+# Name and extension of the downloaded file. (Optional)
 # If not specified, it will attempt to automatically retrieve it from the URL.
-# Get-Download -DownloadUrl "https://example.com/file.zip" -FileName "examplefile.zip"
-
-# Extension of the downloaded file. (Optional)
-# If not specified, it will attempt to automatically retrieve it from the URL.
-# Get-Download -DownloadUrl "https://example.com/file.zip" -FileExtension ".rar"
+# Get-Download -DownloadUrl "https://example.com/file.zip" -FileName "examplefile.zip" or -FileName "*.zip"
 
 # Directory where the downloaded file will be saved. (Optional)
 # By default, the current working directory is used.
