@@ -1,29 +1,96 @@
 function Get-Download {
-	param (
-		[Parameter(Mandatory = $true)]
-		[ValidatePattern('^https?://')]
-		[string]$DownloadUrl,
-		[string]$FileName,
-		[string]$FileExtension,
-		[string]$DownloadPath = (Get-Location).Path,
-		[string]$MetadataPath = (Get-Location).Path,
-		[switch]$DebugMode = $false
-	)
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^https?://')]
+        [string]$DownloadUrl,
+
+        [string]$FileName,
+        
+		[ValidateScript({
+			if (-not (Test-Path "$_" -PathType Container)) {
+				Write-Host "Invalid download folder path: '$_'" -ForegroundColor Red
+				exit 1
+            }
+        })]
+        [string]$DownloadPath = $PWD.Path,
+		
+		[ValidateScript({
+			if (-not (Test-Path "$_" -PathType Container)) {
+				Write-Host "Invalid metadata folder path: '$_'" -ForegroundColor Red
+				exit 1
+            }
+        })]
+        [string]$MetadataPath = $PWD.Path,
+		
+		[ValidateScript({
+			if (-not (Test-Path "$_" -PathType Container)) {
+				Write-Host "Invalid extraction folder path: '$_'" -ForegroundColor Red
+				exit 1
+            }
+        })]
+        [string]$ExtractionPath = $PWD.Path,
+		
+        [string]$ArchivePassword = $null,
+		
+		[switch]$ExtractArchive = $true,
+		
+		[switch]$CreateFolder = $true,
+		
+		[switch]$ForceDownload = $false,
+		
+		[switch]$DebugMode = $true
+    )
 	
-	begin {
+    begin {
+		# Set ExecutionPolicy
 		Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+		
+		# Configure debug preference
 		$DebugPreference = if ($DebugMode) { "Continue" } else { "SilentlyContinue" }
-	}
-	
-	process {
+		
+		# Content Type Map list
+		[hashtable]$ContentTypeMap = @{
+			"application/exe"              = ".exe"
+			"application/x-msdownload"     = ".exe"
+			"application/zip"              = ".zip"
+			"application/x-rar-compressed" = ".rar"
+			"application/x-7z-compressed"  = ".7z"
+			"application/x-tar"            = ".tar"
+			"application/gzip"             = ".gz"
+			"application/x-iso9660-image"  = ".iso"
+			"image/jpeg"                   = ".jpg"
+			"image/png"                    = ".png"
+			"image/gif"                    = ".gif"
+			"image/bmp"                    = ".bmp"
+			"text/plain"                   = ".txt"
+			"text/csv"                     = ".csv"
+			"application/xml"              = ".xml"
+			"application/json"             = ".json"
+			"application/pdf"              = ".pdf"
+			"audio/mpeg"                   = ".mp3"
+			"audio/wav"                    = ".wav"
+			"video/mp4"                    = ".mp4"
+			"video/x-msvideo"              = ".avi"
+			"video/x-matroska"             = ".mkv"
+			"application/msword"           = ".doc"
+			"application/vnd.ms-excel"     = ".xls"
+			"application/vnd.ms-powerpoint"= ".ppt"
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document" = ".docx"
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" = ".xlsx"
+			"application/vnd.openxmlformats-officedocument.presentationml.presentation" = ".pptx"
+		}
+		
+		# Validate Extension function
 		function Validate-Extension {
 			param (
 				[string]$FileExtension,
-				[string[]]$ValidExtensions = @(".exe", ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".pdf", ".txt", ".csv", ".xml", ".json", ".mp3", ".wav", ".mp4", ".avi", ".mkv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx")
+				[string[]]$ValidExtensions = @(".exe", ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".pdf", ".txt", ".csv", ".xml", ".js", ".json", ".mp3", ".wav", ".mp4", ".avi", ".mkv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx")
 			)
-			return $ValidExtensions -Contains $FileExtension
+			return (-not ($ValidExtensions -Contains $FileExtension))
 		}
 		
+		# Save Metadata to JSON file function
 		function Save-Metadata {
 			param (
 				[string]$SavePath,
@@ -36,6 +103,7 @@ function Get-Download {
 			}
 		}
 		
+		# Load Metadata from JSON file function
 		function Load-Metadata {
 			param (
 				[string]$LoadPath
@@ -51,8 +119,11 @@ function Get-Download {
 			}
 		}
 		
+		# Format FileSize function
 		function Format-FileSize {
-			param([long]$Bytes)
+			param(
+				[long]$Bytes
+			)
 			switch ($Bytes) {
 				{ $_ -ge 1GB } { return "{0:N2} GB" -f ($_ / 1GB) }
 				{ $_ -ge 1MB } { return "{0:N2} MB" -f ($_ / 1MB) }
@@ -60,263 +131,415 @@ function Get-Download {
 				default { return "$_ bytes" }
 			}
 		}
-		
-		Write-Debug "DownloadUrl: $DownloadUrl"
+		# Handle GitHub requests
 		if ($DownloadUrl -match "^https://github\.com/([^/]+/[^/]+)") {
-			$ApiUrl = "https://api.github.com/repos/$($Matches[1])/releases/latest"
-			Write-Debug "ApiUrl: $ApiUrl"
+			$repo = $Matches[1]
+			$ApiUrl = "https://api.github.com/repos/$repo/releases"
+			Write-Debug "GitHub API URL: $ApiUrl"
 			
+			# Get releases from GitHub
 			try {
-				$ReleaseData = Invoke-RestMethod -Uri $ApiUrl -TimeoutSec 30
+				$Releases = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -TimeoutSec 30
 			} catch {
-				throw "An error occurred while retrieving data from the GitHub API: $($_.Exception.Message)"
+				throw "Failed to retrieve GitHub releases: $($_.Exception.Message)"
 			}
 			
-			[array]$Assets = if ($FileName -and $FileExtension) {
-				$ReleaseData.assets | Where-Object { $_.name -like "*$FileName*$FileExtension" }
-			} elseif ($FileName) {
-				$ReleaseData.assets | Where-Object { $_.name -like "*$FileName*" }
-			} elseif ($FileExtension) {
-				$ReleaseData.assets | Where-Object { $_.name -like "*$FileExtension" }
+			# Get release type
+			$Stable = $Releases | Where-Object { -not $_.prerelease }
+			$EarlyAccess = $Releases | Where-Object { $_.prerelease }
+			
+			if ($Stable.Count -gt 0) {
+				$Releases = $Stable
+			} elseif ($EarlyAccess.Count -gt 0) {
+				$Releases = $EarlyAccess
 			} else {
-				$ReleaseData.assets | Select-Object name, browser_download_url
+				Write-Host "No releases found in GitHub repository. Verify URL or filters." -ForegroundColor Red
+				exit 1
 			}
 			
-			if ($Assets.Count -eq 1) {
-				$SelectedAsset = $Assets[0]
-			} elseif ($Assets.Count -gt 1) {
-				foreach ($Asset in $Assets) {
+			# Sort releases and select latest
+			$LatestReleases = $Releases | Sort-Object -Property published_at -Descending | Select-Object -First 1
+			
+			# Filter assets with filename
+			[array]$FilteredAssets = if ($FileName) {
+				$LatestReleases.assets | Where-Object { $_.name -like "$FileName" }
+			} else {
+				$LatestReleases.assets | Select-Object name, browser_download_url
+			}
+			
+			if (-not $FilteredAssets) {
+				Write-Host "No matching assets found. Verify filename filter." -ForegroundColor Red
+				exit 1
+			}
+			
+			# Select asset automatically or prompt user if multiple matches found
+			if ($FilteredAssets.Count -eq 1) {
+				$SelectedAsset = $FilteredAssets[0]
+			} elseif ($FilteredAssets.Count -gt 1) {
+				$Count = 0
+				foreach ($Asset in $FilteredAssets) {
 					$Count++
 					Write-Host "$Count. $($Asset.name)"
 				}
 				do {
 					try {
-						[int]$Selection = Read-Host "Select (1-$($Assets.Count))"
-						if ($Selection -match "^[1-9]\d+$" -and $Selection -le $Assets.Count) {
-							$SelectedAsset = $Assets[$Selection - 1]
+						[int]$Selection = Read-Host "Select (1-$($FilteredAssets.Count))"
+						if ($Selection -match "^[1-9]\d+$" -and $Selection -le $FilteredAssets.Count) {
+							$SelectedAsset = $FilteredAssets[$Selection - 1]
 						} else {
-							Write-Host "Invalid selection, try again." -ForegroundColor Red
+							Write-Host "Invalid input. Enter a number between 1 and $($FilteredAssets.Count)." -ForegroundColor Red
 						}
 					} catch {
-						Write-Host "Input string was not in correct format." -ForegroundColor Red
+						Write-Host "Invalid input format. Numbers only." -ForegroundColor Red
 					}
 				} until ($SelectedAsset)
-			} else {
-				Write-Host "No downloadable assets found." -ForegroundColor Red
-				exit 1
 			}
 			
+			# Define file name and download URL
 			$FileName = $SelectedAsset.name
 			$DownloadUrl = $SelectedAsset.browser_download_url
 		}
+    }
+	
+    process {
+        try {
+			# Invoke HEAD request to get metadata
+            $Response = Invoke-WebRequest -Uri $DownloadUrl -Method Head -UseBasicParsing -TimeoutSec 30
+            $ContentDisposition = $Response.Headers['Content-Disposition']
+            $ContentType = $Response.Headers['Content-Type']
+            $ContentLength = $Response.Headers['Content-Length']
+            $NewETag = $Response.Headers['ETag'] -replace '["]', ''
+            $NewLastModified = $Response.Headers['Last-Modified']
+            Write-Debug "Download URL: $DownloadUrl"
+            Write-Debug "================================================="
+            Write-Debug "Content-Disposition: $ContentDisposition"
+            Write-Debug "Content-Type: $ContentType"
+            Write-Debug "Content-Length: $ContentLength"
+            Write-Debug "ETag: $NewETag"
+            Write-Debug "Last-Modified: $NewLastModified"
+            Write-Debug "================================================="
+        } catch {
+            throw "An error occurred while retrieving metadata from HEAD request: $($_.Exception.Message)"
+        }
 		
-		try {
-			$Response = Invoke-WebRequest -Uri $DownloadUrl -Method Head -UseBasicParsing -TimeoutSec 30
-			$ContentDisposition = $Response.Headers['Content-Disposition']
-			$ContentType = $Response.Headers['Content-Type']
-			[int]$ContentLength = $Response.Headers['Content-Length']
-			$ETag = $Response.Headers['ETag'] -replace '["]', ''
-			$LastModified = $Response.Headers['Last-Modified']
-			Write-Debug "================================================="
-			Write-Debug "  Disposition: $ContentDisposition"
-			Write-Debug "         Type: $ContentType"
-			Write-Debug "       Length: $ContentLength"
-			Write-Debug "         ETag: $ETag"
-			Write-Debug " LastModified: $LastModified"
-			Write-Debug "================================================="
-		} catch {
-			throw "An error occurred while retrieving metadata from HEAD request: $($_.Exception.Message)"
-		}
-		
-		if (-not $FileName -and $ContentDisposition -match '="?(.+)\.') {
+        # Determine file name using various methods in order of preference
+        # Method 1: Try to get filename from Content-Disposition
+		if ((-not $FileName) -and ($ContentDisposition -match 'filename="?(.+?)(?=\.[^.]+(?:[";]|$))')) {
 			$FileName = $matches[1]
-			Write-Debug "     FileName: '$FileName' from Content-Disposition"
+			Write-Debug "FileName from ContentDisposition: '$FileName'"
 		}
 		
+		# Method 2: Try to get filename from URL
 		if (-not $FileName) {
 			$FileName = [System.IO.Path]::GetFileName($DownloadUrl)
-			$FileName = $FileName -replace "[{0}]" -f ([System.IO.Path]::GetInvalidFileNameChars() -join '')
-			$FileName = $FileName.Substring(0, [Math]::Min($FileName.Length, 50))
-			Write-Debug "     FileName: '$FileName' from URL"
+			$FileExtension = [System.IO.Path]::GetExtension($FileName)
+			if (Validate-Extension -FileExtension $FileExtension) {
+				$FileName = $FileName -replace '\.', ''
+			}
+			$FileName = [System.IO.Path]::GetFileNameWithoutExtension($FileName)
+			Write-Debug "FileName from URL: '$FileName'"
 		}
 		
+		# # Method 3: Use default name
 		if (-not $FileName) {
 			$FileName = "Undefined"
-			Write-Debug "     FileName: '$FileName' from Default"
+			Write-Debug "FileName from Default: '$FileName'"
 		}
 		
-		if (-not (Validate-Extension -FileExtension $FileExtension) -and ($FileName -match '\..+')) {
+		# Clean up filename by removing invalid characters and limiting length
+		$FileName = $FileName -replace "[{0}=]" -f ([System.IO.Path]::GetInvalidFileNameChars() -join '')
+		$FileName = $FileName.Substring(0, [Math]::Min($FileName.Length, 50))
+		Write-Debug "Cleaned FileName: '$FileName'"
+		
+		# Determine file extension using various methods in order of preference
+        # Method 1: Try to get extension from filename
+		if (Validate-Extension -FileExtension $FileExtension) {
 			$FileExtension = [System.IO.Path]::GetExtension($FileName)
-			Write-Debug "FileExtension: '$FileExtension' from FileName"
+			if (-not $FileExtension) {}
+			$FileName = [System.IO.Path]::GetFileNameWithoutExtension($FileName)
+			Write-Debug "FileExtension from FileName: '$FileExtension'"
 		}
 		
-		if (-not (Validate-Extension -FileExtension $FileExtension) -and ($ContentDisposition -match '=.+(\.[^\.\s"]+)"?')) {
+		# Method 2: Try to get extension from Content-Disposition
+		if ((Validate-Extension -FileExtension $FileExtension) -and ($ContentDisposition -match 'filename=.+(\.[^\.\s"]+)"?')) {
 			$FileExtension = $matches[1]
-			Write-Debug "FileExtension: '$FileExtension' from Content-Disposition"
+			Write-Debug "FileExtension from ContentDisposition: '$FileExtension'"
 		}
 		
-		if (-not (Validate-Extension -FileExtension $FileExtension) -and ($ContentType -match '^([\w\.\-]+\/[\w\.\-]+)')) {
+		# Method 3: Try to get extension from Content-Type
+		if ((Validate-Extension -FileExtension $FileExtension) -and ($ContentType -match '^([\w\.\-]+\/[\w\.\-]+)')) {
 			$ContentType = $matches[1]
-			[hashtable]$ContentTypeMap = @{
-				"application/exe"              = ".exe"
-				"application/x-msdownload"     = ".exe"
-				"application/zip"              = ".zip"
-				"application/x-rar-compressed" = ".rar"
-				"application/x-7z-compressed"  = ".7z"
-				"application/x-tar"            = ".tar"
-				"application/gzip"             = ".gz"
-				"application/x-iso9660-image"  = ".iso"
-				"image/jpeg"                   = ".jpg"
-				"image/png"                    = ".png"
-				"image/gif"                    = ".gif"
-				"image/bmp"                    = ".bmp"
-				"text/plain"                   = ".txt"
-				"text/csv"                     = ".csv"
-				"application/xml"              = ".xml"
-				"application/json"             = ".json"
-				"application/pdf"              = ".pdf"
-				"audio/mpeg"                   = ".mp3"
-				"audio/wav"                    = ".wav"
-				"video/mp4"                    = ".mp4"
-				"video/x-msvideo"              = ".avi"
-				"video/x-matroska"             = ".mkv"
-				"application/msword"           = ".doc"
-				"application/vnd.openxmlformats-officedocument.wordprocessingml.document" = ".docx"
-				"application/vnd.ms-excel"     = ".xls"
-				"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" = ".xlsx"
-				"application/vnd.ms-powerpoint"= ".ppt"
-				"application/vnd.openxmlformats-officedocument.presentationml.presentation" = ".pptx"
-			}
 			$FileExtension = $ContentTypeMap[$ContentType]
-			Write-Debug "FileExtension: '$FileExtension' from Content-Type"
+			Write-Debug "FileExtension from ContentType: '$FileExtension'"
 		}
 		
-		if (-not (Validate-Extension -FileExtension $FileExtension)) {
+		# Method 4: Try to get extension from download URL
+		if (Validate-Extension -FileExtension $FileExtension) {
 			$FileExtension = [System.IO.Path]::GetExtension($DownloadUrl)
-			Write-Debug "FileExtension: '$FileExtension' from URL"
+			Write-Debug "FileExtension from URL: '$FileExtension'"
 		}
 		
-		if (-not (Validate-Extension -FileExtension $FileExtension)) {
+		# Method 5: Use default extension
+		if (Validate-Extension -FileExtension $FileExtension) {
 			$FileExtension = ".unknown"
-			Write-Debug "FileExtension: '$FileExtension' from Default"
+			Write-Debug "FileExtension from Default: '$FileExtension'"
 		}
 		
-		$FileName = [System.IO.Path]::GetFileNameWithoutExtension($FileName)
-		$FullFileName = "$FileName$FileExtension"
-		$DownloadPath = Join-Path -Path $DownloadPath -ChildPath $FullFileName
-		$BackupPath = $DownloadPath + ".backup"
-		$MetadataPath = Join-Path -Path $MetadataPath -ChildPath "Metadata.json"
-		Write-Debug " FullFileName: $FullFileName"
+        # Construct full paths for download, backup, extraction, and metadata
+        $FullFileName = "$FileName$FileExtension"
+        $FullDownloadPath = Join-Path -Path $DownloadPath -ChildPath $FullFileName
+        $FullBackupPath = $FullDownloadPath + ".backup"
+		if ($CreateFolder -eq $true) {
+			$FullExtractionPath = Join-Path -Path $ExtractionPath -ChildPath $FileName
+			$FullBackupFolderPath = Join-Path -Path $FullExtractionPath -ChildPath "Backup"
+		} else {
+			$FullExtractionPath = $ExtractionPath
+			$FullBackupFolderPath = $FullExtractionPath
+		}
+        $FullMetadataPath = Join-Path -Path $MetadataPath -ChildPath "Metadata.json"
+        Write-Debug "Full File Name: $FullFileName"
+        Write-Debug "================================================="
+        Write-Debug "Full Download Path: $FullDownloadPath"
+        Write-Debug "Full Backup Path: $FullBackupPath"
+        Write-Debug "Full Extraction Path: $FullExtractionPath"
+        Write-Debug "Full Metadata Path: $FullMetadataPath"
 		Write-Debug "================================================="
-		Write-Debug " DownloadPath: $DownloadPath"
-		Write-Debug "   BackupPath: $BackupPath"
-		Write-Debug " MetadataPath: $MetadataPath"
 		
-		$Data = Load-Metadata -LoadPath $MetadataPath
 		
-		if (Test-Path $DownloadPath) {
-			$FileHash = (Get-FileHash -Path $DownloadPath -Algorithm MD5).Hash
-			Write-Debug "     FileHash: $FileHash"
-		}
 		
+		# Load metadata from JSON file
+		$Data = Load-Metadata -LoadPath $FullMetadataPath
+		
+		# Retrieve previous metadata if available
 		if ($Data.PSObject.Properties[$FullFileName]) {
 			$OldFileHash = $Data.$FullFileName.Hash
 			$OldETag = $Data.$FullFileName.ETag
 			$OldLastModified = $Data.$FullFileName.LMod
+			Write-Debug "Old File Hash: $OldFileHash"
+			Write-Debug "Old ETag: $OldETag"
+			Write-Debug "Old Last-Modified: $OldLastModified"
 		}
 		
-		Write-Debug "OldFileHash: $OldFileHash"
-		Write-Debug "OldETag: $OldETag"
-		Write-Debug "OldLastModified: $OldLastModified"
+		# Determine if update is needed by comparing metadata
+		$Difference = 0
 		
-		if ($FileHash -ne $OldFileHash) {
+		if (Test-Path $FullDownloadPath) {
+			$NewFileHash = (Get-FileHash -Path $FullDownloadPath -Algorithm MD5).Hash
+			if ($NewFileHash -ne $OldFileHash) {
+				$Difference++
+				Write-Debug "FileHash is diffrent"
+			}
+		}
+		
+		$FolderContents = ((Get-ChildItem -Path $FullExtractionPath -Force -ErrorAction SilentlyContinue).Count -eq 0)
+
+		if ((-not (Test-Path $FullDownloadPath)) -or $FolderContents) {
 			$Difference++
+			Write-Debug "File missing or folder has contents"
 		}
 		
-		if ($ETag -ne $OldETag) {
+		if ($NewETag -ne $OldETag) {
 			$Difference++
+			Write-Debug "ETag is diffrent"
 		}
 		
-		if ($LastModified -ne $OldLastModified) {
+		if ($NewLastModified -ne $OldLastModified) {
 			$Difference++
+			Write-Debug "LastModified is diffrent"
 		}
 		
-		Write-Debug "Difference: $Difference"
+		if ($ForceDownload -eq $true) {
+			$Difference++
+			Write-Debug "ForceDownload is enabled"
+		}
 		
+		# Download file if update is needed
 		if ($Difference -gt 0) {
+		Write-Host "New version available for: '$FullFileName'"
 			
-			if (Test-Path $DownloadPath) {
-				Write-Host "Update available."
-			}
-			
+			# Display file size
 			if ($ContentLength) {	
-				Format-FileSize -Bytes $ContentLength
+				Write-Host "File size: $(Format-FileSize -Bytes $ContentLength)"
 			} else {
-				Write-Host "Unable to retrieve size from Content-Length"
+				Write-Host "File size: Unable to retrieve from server."
 			}
 			
-			if (Test-Path $DownloadPath) {
-				if (Test-Path $BackupPath) {
-					Write-Host "Removing old backup file..."
-					Remove-Item -Path $BackupPath -Force
+			# Create backup of existing file
+			if (Test-Path $FullDownloadPath) {
+				if (Test-Path $FullBackupPath) {
+					Remove-Item -Path $FullBackupPath -Force
 				}
 				Write-Host "Creating backup file..."
-				Rename-Item -Path $DownloadPath -NewName ([System.IO.Path]::GetFileName($BackupPath)) -Force
+				Rename-Item -Path $FullDownloadPath -NewName ([System.IO.Path]::GetFileName($FullBackupPath)) -Force
+				if (Test-Path $FullBackupPath) {
+					Write-Host "Backup file successfully created."
+				} else {
+					Write-Host "Backup file unable to created."
+					if (Test-Path $FullDownloadPath) {
+						Remove-Item -Path $FullDownloadPath -Force
+					}
+				}
 			}
 			
+			# Download file
 			try {
 				Write-Host "Downloading file..."
-				Invoke-WebRequest -Uri $DownloadUrl -Method Get -OutFile $DownloadPath -UseBasicParsing -TimeoutSec 30
+				Invoke-WebRequest -Uri $DownloadUrl -Method Get -OutFile $FullDownloadPath -UseBasicParsing -TimeoutSec 60
 			} catch {
-				if (Test-Path $DownloadPath) {
-					Remove-Item -Path $DownloadPath -Force
-				}
-				Write-Error "Error occurred while downloading file: $($_.Exception.Message)"
+				Write-Host "Error occurred while downloading file: $($_.Exception.Message)" -ForegroundColor Red
 			}
 			
-			if ((Test-Path $DownloadPath) -and ((Get-Item $DownloadPath).Length -gt 0)) {
-				Write-Host "File successfully downloaded."
-				if (Test-Path $BackupPath) {
-					Write-Host "Removing backup file..."
-					Remove-Item -Path $BackupPath -Force
+			# Validate download
+			if ((Test-Path $FullDownloadPath) -and ((Get-Item $FullDownloadPath).Length -gt 0)) {
+				Write-Host "File downloaded successfully: '$FullDownloadPath'" -ForegroundColor Green
+				if (Test-Path $FullBackupPath) {
+					Remove-Item -Path $FullBackupPath -Force
 				}
 				
-				$FileHash = (Get-FileHash -Path $DownloadPath -Algorithm MD5).Hash
-				Write-Debug "FileHash: $FileHash"
+				# Get hash for the new file
+				$NewFileHash = (Get-FileHash -Path $FullDownloadPath -Algorithm MD5).Hash
+				
+				Write-Debug "New File Hash: $NewFileHash"
+				Write-Debug "New ETag: $NewETag"
+				Write-Debug "New Last Modified: $NewLastModified"
 				
 				if (-not $Data.PSObject.Properties[$FullFileName]) {
+					# Add new file metadata
 					Add-Member -InputObject $Data -MemberType NoteProperty -Name $FullFileName -Value ([PSCustomObject]@{
-						Hash = $FileHash
-						ETag = $ETag
-						LMod = $LastModified
+						Hash = $NewFileHash
+						ETag = $NewETag
+						LMod = $NewLastModified
 					})
 				} else {
+					# Update existing file metadata
 					$Data.$FullFileName = [PSCustomObject]@{
-						Hash = $FileHash
-						ETag = $ETag
-						LMod = $LastModified
+						Hash = $NewFileHash
+						ETag = $NewETag
+						LMod = $NewLastModified
 					}
 				}
 				
+				# Define paths to extraction tools
+				$WinRarPath = "$env:ProgramFiles\WinRAR\WinRAR.exe"
+				$SevenZipPath = "$env:ProgramFiles\7-Zip\7z.exe"
+				
+				# Extractable Extensions list
+				[string[]]$ExtractableExtensions = @(".zip", ".rar", ".7z")
+				
+				# Ensure download directory exists
+				if ($CreateFolder -eq $true) {
+					if (-not (Test-Path -Path $FullExtractionPath -PathType Container)) {
+						New-Item -ItemType Directory -Path $FullExtractionPath -Force
+					}
+				}
+				
+				# Extract archive
+				if ($ExtractableExtensions -Contains $FileExtension) {
+					if ($ExtractArchive) {
+						if ($CreateFolder -eq $true) {
+							if ((Get-ChildItem -Path $FullExtractionPath -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+								if (Test-Path -Path $FullBackupFolderPath -PathType Container) {
+									Remove-Item -Path $FullBackupFolderPath -Force
+								}
+								Rename-Item -Path $FullExtractionPath -NewName $FullBackupFolderPath -Force
+							}
+						}
+						
+						try {
+							Write-Host "Extracting file..."
+							# Method 1: Extract using built-in PowerShell for ZIP files
+							if ($FileExtension -eq ".zip") {
+								Write-Debug "Extracting archive using PowerShell"
+								if (-not $ArchivePassword) {
+									Expand-Archive -Path $FullDownloadPath -DestinationPath $FullExtractionPath -Force
+								}
+							}
+							
+							# Method 2: Extract using WinRAR for ZIP, RAR, 7Z files														  
+							if (-not (Test-Path -Path $FullExtractionPath)) {
+								if (Test-Path -Path $WinRarPath) {
+									Write-Debug "Extracting archive using WinRAR"
+									if (-not $ArchivePassword) {
+										& "$WinRarPath" x -o+ -y -ibck "$FullDownloadPath" "$FullExtractionPath\"
+								} else {
+										& "$WinRarPath" x -o+ -y -ibck -p"$ArchivePassword" "$FullDownloadPath" "$FullExtractionPath\"
+									}
+								} else {
+									Write-Host "WinRar not found." -ForegroundColor Yellow
+								}
+							}
+							
+							# Method 3: Extract using 7-Zip for ZIP, RAR, 7Z files													
+							if (-not (Test-Path -Path $FullExtractionPath)) {
+								if (Test-Path -Path $SevenZipPath) {
+									Write-Debug "Extracting archive using 7-Zip"
+									if (-not $ArchivePassword) {
+										& "$SevenZipPath" x "$FullDownloadPath" -o"$FullExtractionPath" -y > $null 2>&1
+									} else {
+										& "$SevenZipPath" x "$FullDownloadPath" -p"$ArchivePassword" -o"$FullExtractionPath" -y > $null 2>&1
+									}
+								} else {
+									Write-Host "7zip not found." -ForegroundColor Yellow
+								}
+							}
+						} catch {
+							Write-Host "Error occurred while extracting file: $($_.Exception.Message)" -ForegroundColor Red
+						}
+						
+						# Check extraction result
+						if ((Get-ChildItem -Path $FullExtractionPath -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+							Write-Host "Error occurred while extracting file: $($_.Exception.Message)" -ForegroundColor Red
+							if (Test-Path -Path $FullExtractionPath -PathType Container) {
+								Remove-Item -Path $FullExtractionPath -Force
+							}
+							if (Test-Path -Path $FullBackupFolderPath -PathType Container) {
+								Rename-Item -Path $FullBackupFolderPath -NewName $FullExtractionPath -Force
+							}
+						} else {
+							Write-Host "File extracted successfully: '$FullExtractionPath'" -ForegroundColor Green
+							if (Test-Path -Path $FullBackupFolderPath -PathType Container) {
+								Remove-Item -Path $FullBackupFolderPath -Force
+							}
+						}
+					}
+				} else {
+					# Move non extracble files to folder
+					if ($CreateFolder -eq $true) {
+						Move-Item -Path $FullDownloadPath -Destination $FullExtractionPath -Force
+					}
+				}
 			} else {
-				Write-Host "File download failed."
-				if (Test-Path $BackupPath) {
-					Write-Host "Restoring backup file."
-					Rename-Item -Path $BackupPath -NewName ([System.IO.Path]::GetFileName($DownloadPath)) -Force
+				# Restore backup if download failed
+				Write-Host "File download failed." -ForegroundColor Red
+				if (Test-Path -Path $FullDownloadPath -PathType Container) {
+					Remove-Item -Path $FullDownloadPath -Force
+				}
+				if (Test-Path $FullBackupPath) {
+					Rename-Item -Path $FullBackupPath -NewName ([System.IO.Path]::GetFileName($FullDownloadPath)) -Force
 				}
 			}
 		} else {
-			if (Test-Path $DownloadPath) {Write-Host "Update not found."}
+			Write-Host "File is already up-to-date: '$FullFileName'"
 		}
 	}
 	
 	end {
-		Save-Metadata -SavePath $MetadataPath -SaveData $Data
-		Write-Debug ($Data.PSObject.Properties | ForEach-Object {"
-			File: $($_.Name)
-			Hash: $($_.Value.Hash)
-			ETag: $($_.Value.ETag)
-			LMod: $($_.Value.LMod)"
-		} | Out-String)
+		# TODO: Remove non-existent file variables from metadata
+		
+		# Save updated metadata to JSON file
+		Save-Metadata -SavePath $FullMetadataPath -SaveData $Data
+		
+		# Output metadata for debugging purposes
+		$Data.PSObject.Properties | ForEach-Object {
+			[PSCustomObject]@{
+				File = $_.Name
+				Hash = $_.Value.Hash
+				ETag = $_.Value.ETag
+				LMod = $_.Value.LMod
+			}
+		} | Format-List | Out-String | Write-Debug
+
+		# Sparete invokes each other
+		Write-Host ""
 	}
 }
