@@ -39,6 +39,8 @@ function Get-Download {
 		
 		[switch]$ForceDownload = $false,
 		
+		[switch]$UpgradeHttp = $true,
+		
 		[switch]$DebugMode = $true
     )
 	
@@ -53,39 +55,22 @@ function Get-Download {
 		[hashtable]$ContentTypeMap = @{
 			"application/exe"              = ".exe"
 			"application/x-msdownload"     = ".exe"
+			"application/x-executable"     = ".exe"
+			"application/vnd.microsoft.portable-executable" = ".exe"
 			"application/zip"              = ".zip"
+			"application/x-zip-compressed" = ".zip"
+			"application/x-zip"            = ".zip"
+			"application/vnd.rar"          = ".rar"
 			"application/x-rar-compressed" = ".rar"
+			"application/x-rar"            = ".rar"
 			"application/x-7z-compressed"  = ".7z"
-			"application/x-tar"            = ".tar"
-			"application/gzip"             = ".gz"
-			"application/x-iso9660-image"  = ".iso"
-			"image/jpeg"                   = ".jpg"
-			"image/png"                    = ".png"
-			"image/gif"                    = ".gif"
-			"image/bmp"                    = ".bmp"
-			"text/plain"                   = ".txt"
-			"text/csv"                     = ".csv"
-			"application/xml"              = ".xml"
-			"application/json"             = ".json"
-			"application/pdf"              = ".pdf"
-			"audio/mpeg"                   = ".mp3"
-			"audio/wav"                    = ".wav"
-			"video/mp4"                    = ".mp4"
-			"video/x-msvideo"              = ".avi"
-			"video/x-matroska"             = ".mkv"
-			"application/msword"           = ".doc"
-			"application/vnd.ms-excel"     = ".xls"
-			"application/vnd.ms-powerpoint"= ".ppt"
-			"application/vnd.openxmlformats-officedocument.wordprocessingml.document" = ".docx"
-			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" = ".xlsx"
-			"application/vnd.openxmlformats-officedocument.presentationml.presentation" = ".pptx"
 		}
 		
 		# Validate Extension function
 		function Validate-Extension {
 			param (
 				[string]$FileExtension,
-				[string[]]$ValidExtensions = @(".exe", ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".pdf", ".txt", ".csv", ".xml", ".js", ".json", ".mp3", ".wav", ".mp4", ".avi", ".mkv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx")
+				[string[]]$ValidExtensions = @(".exe", ".zip", ".rar", ".7z")
 			)
 			return (-not ($ValidExtensions -Contains $FileExtension))
 		}
@@ -131,10 +116,18 @@ function Get-Download {
 				default { return "$_ bytes" }
 			}
 		}
+		
+		# Update http requests to https
+		if ($DownloadUrl.StartsWith("http:")) {
+			if ($UpgradeHttp -eq $true) {
+				$DownloadUrl = $DownloadUrl -replace 'http:', 'https:'
+			}
+		}
+		
 		# Handle GitHub requests
 		if ($DownloadUrl -match "^https://github\.com/([^/]+/[^/]+)") {
-			$repo = $Matches[1]
-			$ApiUrl = "https://api.github.com/repos/$repo/releases"
+			$Repo = $Matches[1]
+			$ApiUrl = "https://api.github.com/repos/$Repo/releases"
 			Write-Debug "GitHub API URL: $ApiUrl"
 			
 			# Get releases from GitHub
@@ -323,19 +316,19 @@ function Get-Download {
 		# Determine if update is needed by comparing metadata
 		$Difference = 0
 		
+		if ((-not (Test-Path $FullDownloadPath)) -and 
+			(Test-Path -Path $FullExtractionPath -PathType Container) -and 
+			((Get-ChildItem -Path $FullExtractionPath -Force | Measure-Object).Count -eq 0)) {
+			$Difference++
+			Write-Debug "File missing and folder hasn't have contents"
+		}
+
 		if (Test-Path $FullDownloadPath) {
 			$NewFileHash = (Get-FileHash -Path $FullDownloadPath -Algorithm MD5).Hash
 			if ($NewFileHash -ne $OldFileHash) {
 				$Difference++
 				Write-Debug "FileHash is diffrent"
 			}
-		}
-		
-		$FolderContents = ((Get-ChildItem -Path $FullExtractionPath -Force -ErrorAction SilentlyContinue).Count -eq 0)
-
-		if ((-not (Test-Path $FullDownloadPath)) -or $FolderContents) {
-			$Difference++
-			Write-Debug "File missing or folder has contents"
 		}
 		
 		if ($NewETag -ne $OldETag) {
@@ -374,7 +367,7 @@ function Get-Download {
 				if (Test-Path $FullBackupPath) {
 					Write-Host "Backup file successfully created."
 				} else {
-					Write-Host "Backup file unable to created."
+					Write-Host "Backup file could not be created."
 					if (Test-Path $FullDownloadPath) {
 						Remove-Item -Path $FullDownloadPath -Force
 					}
@@ -429,7 +422,12 @@ function Get-Download {
 				# Ensure download directory exists
 				if ($CreateFolder -eq $true) {
 					if (-not (Test-Path -Path $FullExtractionPath -PathType Container)) {
-						New-Item -ItemType Directory -Path $FullExtractionPath -Force
+						[void](New-Item -ItemType Directory -Path $FullExtractionPath -Force)
+						if (Test-Path -Path $FullExtractionPath -PathType Container) {
+							Write-Host "folder successfully created."
+						} else {
+							Write-Host "Folder could not be created." -ForegroundColor Red
+						}
 					}
 				}
 				
@@ -437,10 +435,11 @@ function Get-Download {
 				if ($ExtractableExtensions -Contains $FileExtension) {
 					if ($ExtractArchive) {
 						if ($CreateFolder -eq $true) {
-							if ((Get-ChildItem -Path $FullExtractionPath -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+							if ((Get-ChildItem -Path $FullExtractionPath -Force | Measure-Object).Count -gt 0) {
 								if (Test-Path -Path $FullBackupFolderPath -PathType Container) {
 									Remove-Item -Path $FullBackupFolderPath -Force
 								}
+								# ERROR: Cannot rename the specified target, because it represents a path or device name.
 								Rename-Item -Path $FullExtractionPath -NewName $FullBackupFolderPath -Force
 							}
 						}
@@ -487,7 +486,7 @@ function Get-Download {
 						}
 						
 						# Check extraction result
-						if ((Get-ChildItem -Path $FullExtractionPath -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+						if ((Get-ChildItem -Path $FullExtractionPath -Force | Measure-Object).Count -eq 0) {
 							Write-Host "Error occurred while extracting file: $($_.Exception.Message)" -ForegroundColor Red
 							if (Test-Path -Path $FullExtractionPath -PathType Container) {
 								Remove-Item -Path $FullExtractionPath -Force
@@ -503,7 +502,7 @@ function Get-Download {
 						}
 					}
 				} else {
-					# Move non extracble files to folder
+					# Move non extractable files to folder
 					if ($CreateFolder -eq $true) {
 						Move-Item -Path $FullDownloadPath -Destination $FullExtractionPath -Force
 					}
@@ -524,8 +523,6 @@ function Get-Download {
 	}
 	
 	end {
-		# TODO: Remove non-existent file variables from metadata
-		
 		# Save updated metadata to JSON file
 		Save-Metadata -SavePath $FullMetadataPath -SaveData $Data
 		
@@ -539,7 +536,7 @@ function Get-Download {
 			}
 		} | Format-List | Out-String | Write-Debug
 
-		# Sparete invokes each other
+		# Separate invokes each other
 		Write-Host ""
 	}
 }
