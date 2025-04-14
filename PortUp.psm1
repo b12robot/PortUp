@@ -253,6 +253,12 @@ function Get-Download {
 
                     # Download Successful
                     Write-Host "File downloaded successfully: '$FullDownloadPath'" -ForegroundColor Green
+
+                    # If backup file exists, remove it
+                    if (Test-Path $FullBackupPath) {
+                        Remove-Item -Path $FullBackupPath -Force -ErrorAction SilentlyContinue
+                    }
+
                 }
             } catch {
                 # Restore Backup if Download Failed
