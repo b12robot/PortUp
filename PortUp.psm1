@@ -113,6 +113,24 @@ function Get-Download {
             }
         }
 
+        # Remove Metadata
+        function Remove-Metadata {
+            param (
+                [PSObject]$RemoveData,
+                [string]$FileKey
+            )
+            try {
+                if ($RemoveData.PSObject.Properties[$FileKey]) {
+                    # If exist remove metadata
+                    Write-Debug "Removing metadata for key: $FileKey"
+                    $RemoveData.PSObject.Properties.Remove($FileKey)
+                }
+                return $RemoveData
+            } catch {
+                throw "An error occurred while removing metadata: $($_.Exception.Message)"
+            }
+        }
+
         # Format FileSize Function
         function Format-FileSize {
             param(
@@ -549,6 +567,13 @@ function Get-Download {
     }
     
     end {
+        # If file missing and the folder is empty and file metadata exist remove metadata
+        if ((-not (Test-Path $FullDownloadPath)) -and (Test-Path $FullExtractionPath -PathType Container)) {
+            if ((Get-ChildItem -Path $FullExtractionPath -Force).Count -eq 0) {
+                Remove-Metadata -RemoveData $Data -FileKey $FullFileName
+            }
+        }
+
         # Save Updated Metadata
         Save-Metadata -SavePath $FullMetadataPath -SaveData $Data
 
