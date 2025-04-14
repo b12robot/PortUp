@@ -28,7 +28,7 @@ function Get-Download {
         })]
         [string]$ExtractionPath = $PWD.Path,
         
-        [securestring]$ArchivePassword = $null,
+        [string]$ArchivePassword = $null,
         
         [switch]$ForceDownload = $false,
         
@@ -227,7 +227,7 @@ function Get-Download {
             
             # Download File
             try {
-                Write-Host "Downloading file..."
+                Write-Host "Downloading file..." -ForegroundColor Yellow
                 Invoke-WebRequest -Uri $DownloadUrl -Method Get -OutFile $FullDownloadPath -UseBasicParsing -TimeoutSec 60
 
                 # Validate Download
@@ -266,7 +266,7 @@ function Get-Download {
             param(
                 [string]$FullDownloadPath,
                 [string]$FullExtractionPath,
-                [securestring]$ArchivePassword
+                [string]$ArchivePassword
             )
             
             # Define Extraction Tools Paths
@@ -284,7 +284,7 @@ function Get-Download {
             }
             
             try {
-                Write-Host "Extracting file..."
+                Write-Host "Extracting file..." -ForegroundColor Yellow
                 # Method 1: Extract using built-in PowerShell for ZIP files
                 if ([System.IO.Path]::GetExtension($FullDownloadPath) -eq ".zip") {
                     Write-Debug "Extracting archive using PowerShell"
@@ -293,21 +293,7 @@ function Get-Download {
                     }
                 }
 
-                # Method 2: Extract using WinRAR for ZIP, RAR, 7Z files
-                if ((Get-ChildItem -Path $FullExtractionPath -Force).Count -eq 0) {                                                 
-                    if (Test-Path -Path $WinRarPath) {
-                        Write-Debug "Extracting archive using WinRAR"
-                        if (-not $ArchivePassword) {
-                            & "$WinRarPath" x -o+ -y -ibck "$FullDownloadPath" "$FullExtractionPath\" > $null 2>&1
-                        } else {
-                            & "$WinRarPath" x -o+ -y -ibck -p"$ArchivePassword" "$FullDownloadPath" "$FullExtractionPath\" > $null 2>&1
-                        }
-                    } else {
-                        Write-Host "WinRAR not found." -ForegroundColor Red
-                    }
-                }
-
-                # Method 3: Extract using 7-Zip for ZIP, RAR, 7Z files
+                # Method 2: Extract using 7-Zip for ZIP, RAR, 7Z files
                 if ((Get-ChildItem -Path $FullExtractionPath -Force).Count -eq 0) {
                     if (Test-Path -Path $SevenZipPath) {
                         Write-Debug "Extracting archive using 7-Zip"
@@ -318,6 +304,20 @@ function Get-Download {
                         }
                     } else {
                         Write-Host "7-Zip not found." -ForegroundColor Red
+                    }
+                }
+
+                # Method 3: Extract using WinRAR for ZIP, RAR, 7Z files
+                if ((Get-ChildItem -Path $FullExtractionPath -Force).Count -eq 0) {                                                 
+                    if (Test-Path -Path $WinRarPath) {
+                        Write-Debug "Extracting archive using WinRAR"
+                        if (-not $ArchivePassword) {
+                            & "$WinRarPath" x -o+ -y -ibck "$FullDownloadPath" "$FullExtractionPath\" > $null 2>&1
+                        } else {
+                            & "$WinRarPath" x -o+ -y -ibck -p"$ArchivePassword" "$FullDownloadPath" "$FullExtractionPath\" > $null 2>&1
+                        }
+                    } else {
+                        Write-Host "WinRAR not found." -ForegroundColor Red
                     }
                 }
 
@@ -516,13 +516,13 @@ function Get-Download {
         
         # Download File if Update is Needed
         if ($Difference -gt 0) {
-            Write-Host "New version available for: '$FileName'"
+            Write-Host "New version available for: $FileName" -ForegroundColor Yellow
 
             # Display File Size
             if ($ContentLength) {
-                Write-Host "File size: $(Format-FileSize -Bytes $ContentLength)"
+                Write-Host "File size: $(Format-FileSize -Bytes $ContentLength)" -ForegroundColor Yellow
             } else {
-                Write-Host "File size: Unable to retrieve from server."
+                Write-Host "File size: Unable to retrieve from server." -ForegroundColor Yellow
             }
 
             # Download File
@@ -534,7 +534,7 @@ function Get-Download {
             # Update Metadata
             $Data = Update-Metadata -UpdateData $Data -FileKey $FullFileName -Hash $NewFileHash -ETag $NewEntityTag -LMod $NewLastModified
         } else {
-            Write-Host "File is already up-to-date: '$FullFileName'"
+            Write-Host "File is already up-to-date: $FileName" -ForegroundColor Green
         }
         
         # Extractable Extensions List
@@ -542,7 +542,9 @@ function Get-Download {
         
         # Extract File if Extension is Extractable
         if ($ExtractableExtensions -Contains $FileExtension) {
-            Extract-File -FullDownloadPath $FullDownloadPath -FullExtractionPath $FullExtractionPath -ArchivePassword $ArchivePassword
+            if ((-not (Test-Path $FullExtractionPath -PathType Container)) -or ((Get-ChildItem -Path $FullExtractionPath -Force).Count -eq 0)) {
+                Extract-File -FullDownloadPath $FullDownloadPath -FullExtractionPath $FullExtractionPath -ArchivePassword $ArchivePassword
+            }   
         }
     }
     
